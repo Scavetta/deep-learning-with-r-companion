@@ -1,0 +1,112 @@
+---
+title: "Residual Analysis"
+author: "Rick Scavetta"
+date: "26 November 2016"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+[http://datascienceplus.com/how-to-detect-heteroscedasticity-and-rectify-it/]
+
+## Intro
+
+One of the important assumptions of linear regression is that, there should be no heteroscedasticity of residuals. In simpler terms, this means that the variance of residuals should not increase with fitted values of response variable. In this post, I am going to explain why it is important to check for heteroscedasticity, how to detect it in your model? If is present, how to make amends to rectify the problem, with example R codes. This process is sometimes referred to as *residual analysis*.
+
+
+## Why?
+
+It is customary to check for heteroscedasticity of residuals once you build the linear regression model. The reason is, we want to check if the model thus built is unable to explain some pattern in the response variable Y, that eventually shows up in the residuals. This would result in an inefficient and unstable regression model that could yield bizarre predictions later on.
+
+## How?
+
+I am going to illustrate this with an actual regression model based on the cars dataset, that comes built-in with R. Lets first build the model using the lm() function.
+
+```{r cars}
+summary(cars)
+```
+
+
+```{r}
+# data
+plot(cars, xlim = c(0,25))
+
+# model
+lmMod <- lm(dist ~ speed, data=cars) # initial model
+abline(lmMod, col = "red")
+```
+
+Now that the model is ready, there are two ways to test for heterosedasticity:
+
+1. Graphically
+
+```{r echo = F}
+opar <- par(mfrow=c(2,2)) # init 4 charts in 1 panel
+plot(lmMod)
+par(opar)
+```
+
+The plots we are interested in are at the top-left and bottom-left. 
+
+The top-left is residuals vs fitted values, 
+The bottom-left is standardised residuals on Y axis.
+
+If there is absolutely no heteroscedastity, you should see a completely random, equal distribution of points throughout the range of X axis and a flat red line. But in our case, as you can notice from the top-left plot, the red line is slightly curved and the residuals seem to increase as the fitted Y values increase. So, the inference here is, heteroscedasticity exists.
+
+2. Statistical tests
+
+Sometimes you may want an algorithmic approach to check for heteroscedasticity so that you can quantify its presence automatically and make amends. For this purpose, there are a couple of tests that comes handy to establish the presence or absence of heteroscedasticity – The *Breush-Pagan test* and the *NCV test*.
+
+```{r}
+library(lmtest)
+bptest(lmMod)  # Breusch-Pagan test
+
+library(car)
+ncvTest(lmMod)  # NCV Test
+```
+
+Both these test have a p-value less that a significance level of `0.05`, therefore we can reject the null hypothesis that the variance of the residuals is constant and infer that heteroscedasticity is indeed present, thereby confirming our graphical inference.
+
+## Fix it
+
+1. Re-build the model with new predictors.
+
+Since we have no other predictors apart from “speed”, I can’t show this method now. However, one option I might consider trying out is to add the residuals of the original model as a predictor and rebuild the regression model. With a model that includes residuals (as X) whose future actual values are unknown, you might ask what will be the value of the new predictor (i.e. residual) to use on the test data?. The solutions is, for starters, you could use the mean value of residuals for all observations in test data. Though is this not recommended, it is an approach you could try out if all available options fail.
+
+2. Variable transformation such as Box-Cox transformation.
+
+Box-cox transformation is a mathematical transformation of the variable to make it approximate to a normal distribution. Often, doing a box-cox transformation of the Y variable solves the issue.
+
+```{r}
+distBCMod <- caret::BoxCoxTrans(cars$dist)
+print(distBCMod)
+```
+
+The model for creating the box-cox transformed variable is ready. Lets now apply it to `car$dist` and append it to a new dataframe.
+
+```{r}
+cars$dist_new <- predict(distBCMod, cars$dist) # append the transformed variable to cars
+head(cars) # view the top 6 rows
+
+```
+
+Build the model and check for heteroscedasticity.
+
+```{r}
+lmMod_bc <- lm(dist_new ~ speed, data=cars)
+bptest(lmMod_bc)
+```
+
+With a p-value of 0.91, we fail to reject the null hypothesis (that variance of residuals is constant) and therefore infer that ther residuals are homoscedastic. Lets check this graphically as well.
+```{r}
+plot(dist_new ~ speed, data=cars, xlim = c(0,25))
+abline(lmMod_bc, col = "red")
+```
+```{r echo = F}
+opar <- par(mfrow=c(2,2)) # init 4 charts in 1 panel
+plot(lmMod_bc)
+par(opar)
+```
+

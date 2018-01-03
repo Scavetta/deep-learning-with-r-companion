@@ -1,0 +1,323 @@
+---
+title: "A large family is not good for Survival on the Titanic"
+output:
+ html_document
+---
+
+A policy of "women and child first" on the Titanic is clearly demonstrated by the data but
+appears that having a large family was also not good for chances of survival.  
+
+If a person had 5 family members or more (including themselves) then
+more likely that person didn't survive especially in the third class
+which had entire families onboard.
+
+# Load data and setup factors
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+loaddata <- function(file) {
+ data <- read.csv(file, header = TRUE, stringsAsFactors=F)
+ # compute family size on dataset (including self)
+ data$FamilySize <- data$SibSp + data$Parch + 1
+
+ data
+}
+
+data <- loaddata("../input/train.csv")
+# load real test data
+titanic_test <- loaddata("../input/test.csv")
+
+# change survived from integer to boolean
+
+data$Survived <- as.logical(data$Survived)
+levels(data$Survived) <- c("Not survived", "Survived")
+
+# make explicit factor levels for specific variables: 3=Pclass, 5=Sex, 12=Embarked
+for(i in c(3,5,12)) {
+  data[,i] <- as.factor(data[,i])
+}
+
+```
+
+# Age, Sex, and Pclass best predictors for survival
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(ggplot2)
+ggplot(data, aes(x=Age, y=Pclass, color=Survived)) + 
+  geom_jitter(position = position_jitter(height = .1)) +
+  scale_color_manual(values=c("red", "blue")) + facet_grid(Sex ~ .) +
+  ggtitle("Age, Sex, and Class as Survival Factors") + ylab("Pclass")
+```
+
+##
+## Create adjusted family size variable for people sharing cabins but not registered as family members
+##
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# e.g., if two people assigned to cabin A13 and familysize == 1 then bump up familysize to 2
+# combine set of cabins from both test and training data
+cabins <- data$Cabin # 1309 rows
+n_occur <- data.frame(table(Var1=cabins))	# 187 rows
+# remove missing cabin and/or juse the cabin letter code (e.g. D)
+n_occur <- subset(n_occur, nchar(as.character(Var1)) > 1) # 183 rows
+
+sharedCabins <- n_occur$Var1[n_occur$Freq > 1]
+data$FamilySizeAdj <- data$FamilySize
+print(table(data$FamilySize))
+
+sharedInd <- data$FamilySizeAdj == 1 & data$Cabin %in% sharedCabins
+data$FamilySizeAdj[sharedInd] <- 2
+rowCount <- sum(sharedInd)
+print(c("adjusted rows", rowCount)) # 27 rows
+print(table(data$FamilySizeAdj))
+```
+
+# Break up training set into subset training and test set
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(caret)
+set.seed(820)
+inTrainingSet <- createDataPartition(data$Survived, p = 0.5, list=FALSE)
+train <- data[inTrainingSet,]
+test <- data[-inTrainingSet,]
+```
+
+# Does adding more variables improve predictions???
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+modelaccuracy <- function(test, rpred) {
+  result_1 <- test$Survived == rpred
+  sum(result_1) / length(rpred)
+}
+
+checkaccuracy <- function(accuracy) {
+	if (accuracy > bestaccuracy) {
+	 bestaccuracy <- accuracy
+	 assign("bestaccuracy", accuracy, envir = .GlobalEnv)
+	 label <- 'better'
+	} else if (accuracy < bestaccuracy) {
+	 label <- 'worse'
+	} else {
+	 label <- 'no change'
+	}
+	label
+}
+
+library(rpart)
+# starting with Age and Sex as indicators
+fol <- formula(Survived ~ Age + Sex)						# 0.845
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+bestaccuracy <- accuracy # init base accuracy
+print(c("accuracy1", accuracy))								# baseline
+```
+
+# Add Pclass variable
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass)				# 0.838
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+# almost as good but little worse
+print(c("accuracy2", accuracy, accuracyLabel))				# worse
+```
+
+# Substitute Pclass with fare variable
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Fare)					# 0.807
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy3", accuracy, accuracyLabel))				# worse
+```
+
+# Add back Pclass variable
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass + Fare)		# 0.820
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+#print(rmodel)
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy4", accuracy, accuracyLabel))				# worse
+```
+Pclass is better than previous but less so than just age & sex.
+
+# Add SibSp + Parch variables
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass + Fare + SibSp + Parch) # 0.838
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+print(rmodel)
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy5", accuracy, accuracyLabel))				# worse
+```
+SibSp + Parch is little better than previous but still less so than just age & sex.
+
+# Test if deck letter helps predict survivability
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# strip off cabin numbers
+# Extract the deck number
+# first letter : Deck (e.g. A31 -> A)
+
+# make sure Deck in both sets has same levels
+# if Test set has T but not Train set different levels causes error in model
+train$Deck <- substr(train$Cabin,1,1)
+train$Deck[train$Deck==''] = NA
+test$Deck <- substr(test$Cabin,1,1)
+test$Deck[test$Deck==''] = NA
+
+train$Deck <- as.factor(train$Deck)
+test$Deck <- as.factor(test$Deck)
+
+# make Deck have same levels
+c <- union(levels(train$Deck), levels(test$Deck))
+levels(test$Deck) <- c
+levels(train$Deck) <- c
+
+# test if deck letter improves the prediction
+
+fol <- formula(Survived ~ Age + Sex + Pclass + SibSp + Parch + Fare + Deck) # 0.807
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+#print(rmodel)
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy6", accuracy, accuracyLabel)) 							# 0.807 worse
+```
+
+# Check if FamilySize variable is a useful prediction of survivability
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass + FamilySize)				# 0.872
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+print(rmodel)
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy7", accuracy, accuracyLabel)) 						# best so far
+
+p <- ggplot(aes(x=Pclass,y=factor(FamilySize),color=Survived),data=data) + 
+ geom_jitter() + facet_grid(Sex ~ .)
+p + ggtitle("Large Family Size >= 5 more likely to not survive") + theme_bw() + 
+ geom_hline(yintercept=5) + ylab("Family Size")
+``` 
+
+**If person had 5 family members or more (including themselves) then more likely the
+person didn't survive especially in the third class which had entire families onboard.**
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+mosaicplot(table(FamilySize=data$FamilySize, Survived=data$Survived),
+ main="Passenger Survival by Family Size",
+ color=c("#fb8072", "#8dd3c7"), cex.axis=1.2)
+```
+
+**Mosaic plot above clearly shows the drop-off survival at family size of 5 or greater. 
+A small family of 2 to 4 people increases chance of survival but 5 or more does not.
+Note the size is the number of family members including the passenger so a single
+passenger has a family size of 1.**
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# make explicit factor levels for specific variables: Sex + Pclass
+titanic_test$Sex <- as.factor(titanic_test$Sex)
+titanic_test$Pclass <- as.factor(titanic_test$Pclass)
+# now train on entire training set (714 rows)
+fol <- formula(Survived ~ Age + Sex + Pclass + FamilySize)
+model <- rpart(fol, method="class", data=data)
+library(rpart.plot)	
+rpart.plot(model,branch=0,branch.type=2,type=1,extra=102,shadow.col="pink",box.col="gray",split.col="magenta",
+  main="Decision tree for model")
+```
+
+Notice two leaf nodes on the bottom row marked as FALSE with parent logic testing FamilySize variable.  
+* Node on left branch Sex=male & Age < 6.5 & FamilySize > 4.    
+* Node on right branch Sex=Female & Pclass=3 & FamilySize > 4.  
+**Both females and males of large families apparently stayed together and
+perished together because all couldn't be saved.**
+
+# Check if removing Pclass changes the overall accuracy
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Sex + Age + FamilySize)				    # 0.854
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy8", accuracy, accuracyLabel)) 	                    # worse
+```
+
+## Adjust family size for people sharing cabins but not registered as family members
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# does traveling alone contribute to outcome
+fol <- formula(Survived ~ Age + Sex + Pclass + FamilySizeAdj)			# 0.872
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+# print(rmodel)
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy9", accuracy, accuracyLabel)) 							# no change
+```
+
+**Too few rows involved so no change**
+
+## Next check if traveling alone boolean variable is better predicter than family size
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass + TravelAlone)			# 0.843
+train$TravelAlone <- train$FamilySize == 1
+test$TravelAlone <- test$FamilySize == 1
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy10", accuracy, accuracyLabel)) 			        # worse / no better
+```
+
+## Next check if adding Embarked improves the accuracy
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+fol <- formula(Survived ~ Age + Sex + Pclass + FamilySize + Embarked)	# 0.858 (worse)
+rmodel <- rpart(fol, method="class", data=train)
+rpred <- predict(rmodel, newdata=test, type="class")
+accuracy <- modelaccuracy(test, rpred)
+accuracyLabel <- checkaccuracy(accuracy)
+print(c("accuracy11", accuracy, accuracyLabel)) 					    # little worse
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+print (c("best accuracy", bestaccuracy))
+```
+
+## Summary
+
+**Adding all or many variables as factors to the model is not always a good idea. In fact,
+sometimes it makes the prediction accuracy worse as shown above. Better to fine tune the
+machine learning process using the right parameters.**
+
+formula								                             | measured accuracy
+---------------------------------------------------------------- | -----
+1. Survived ~ Age + Sex                        					 | 0.845
+2. Survived ~ Age + Sex + Pclass               					 | 0.838
+3. Survived ~ Age + Sex + Fare                 					 | 0.807
+4. Survived ~ Age + Sex + Pclass + Fare        					 | 0.820
+5. Survived ~ Age + Sex + Pclass + Fare + SibSp + Parch 		 | 0.838
+6. Survived ~ Age + Sex + Pclass + SibSp + Parch + Fare + Deck   | 0.807
+7. Survived ~ Age + Sex + Pclass + FamilySize              		 | 0.872 (*best*)
+8. Survived ~ Age + Sex + FamilySize                       	     | 0.854
+9. Survived ~ Age + Sex + Pclass + FamilySizeAdj                 | 0.872 (no change)
+10. Survived ~ Age + Sex + Pclass + TravelAlone             	 | 0.843
+11. Survived ~ Age + Sex + Pclass + FamilySize + Embarked   	 | 0.858
+
+**The best prediction for survival from the analysis above was based on the formula(Survived ~ Age + Sex + Pclass + FamilySize)
+as applied to Recursive Partitioning and Regression Trees (aka rpart).**
+
+Changing the starting random seed and/or using other training methods (e.g. randomForest, cforest, etc.)
+may have different results. FamilySize is also a good predictor to include in cforest-based machine learning.
