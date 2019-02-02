@@ -1,0 +1,185 @@
+---
+title: "Monitoring deep-learning models with Callbacks"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+# Initialize package
+# install.packages(keras)
+library(keras)
+```
+
+In this case study, we'll showcase two loss functions: `cateogircal_crossentropy`, which we saw in the MNIST case study, and `sparse_categorical_crossentropy`.
+
+## Install tensorflow 
+
+It's only necessary to run this once. 
+
+```{r install, eval = F}
+# for GPU
+# install_keras(tensorflow = "gpu")
+
+# or CPU:
+# install_keras() # for cpu
+```
+
+## Prepare data
+
+```{r}
+c(c(train_images, train_labels), c(test_images, test_labels)) %<-% dataset_mnist()
+
+# train_images <- array_reshape(train_images, c(60000, 28, 28, 1))
+# train_images <- train_images / 255
+train_images <- array_reshape(train_images, c(60000, 28 * 28))
+train_images <- train_images / 255
+
+# test_images <- array_reshape(test_images, c(10000, 28, 28, 1))
+# test_images <- test_images / 255
+test_images <- array_reshape(test_images, c(10000, 28 * 28))
+test_images <- test_images / 255
+
+train_labels <- to_categorical(train_labels)
+test_labels <- to_categorical(test_labels)
+
+network <- keras_model_sequential() %>%
+  layer_dense(units = 512, activation = "relu", input_shape = c(28 * 28), name = "hidden_1") %>%
+  layer_dense(units = 10, activation = "softmax", name = "hidden_2")
+
+network %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+```
+
+## Using callbacks to act on a model during training
+
+```{r}
+history <- network %>%
+  fit(train_images, train_labels,
+      epochs = 5,
+      batch_size = 128,
+      callbacks = callback_model_checkpoint("weights.{epoch:02d}.hdf5", save_weights_only = TRUE)
+  )
+```
+
+To use more than one callback, combine them in a list:
+
+```{r eval = FALSE}
+history <- network %>%
+  fit(train_images, train_labels,
+      epochs = 5,
+      batch_size = 128,
+      callbacks = list(callback_model_checkpoint("weights.{epoch:02d}.hdf5", save_weights_only = TRUE),
+                       callback_csv_logger("log.csv"))
+  )
+
+```
+
+## Load in models
+
+Hierarchical Data Format (HDF) is a set of file formats (HDF4, HDF5) designed to store and organize large amounts of data.
+
+Read in the first epoch model:
+
+```{r}
+
+# if (!requireNamespace("BiocManager", quietly = TRUE)) {
+#     install.packages("BiocManager")
+# }
+# BiocManager::install("rhdf5", version = "3.8")
+
+library(rhdf5)
+
+h5ls("weights.01.hdf5")
+
+weights01_01 <- h5read("weights.01.hdf5", "/hidden_1/hidden_1")
+H5close()
+weights01_02 <- h5read("weights.01.hdf5", "/hidden_2/hidden_2")
+H5close()
+```
+
+## Visualize individual weights:
+
+Epoch 1, first layer weights matrix
+
+```{r echo = FALSE}
+
+startmat <- matrix(colSums(weights01_01$`kernel:0`), ncol = 28)
+image(startmat)
+
+```
+
+## Visualize all weights & bias matrices:
+
+```{r echo = FALSE, out.width = '.45\\linewidth', fig.width = 3, fig.height = 3, fig.show = 'hold', fig.align = 'center'}
+library(tidyverse)
+library(glue)
+
+plotWeight <- function(epoch = 1, layer = 1, type = "weights") {
+  epoch <- stringr::str_pad(epoch, width = 2, pad = "0")
+  filename <- paste0("weights.", epoch, ".hdf5")
+  
+  labels <- h5ls("weights.01.hdf5")
+  
+  
+  if (layer == 1) {
+    layer_1 <- h5read(filename, labels$group[3])
+    H5close()
+    if (type == "weights") {
+      startmat <- matrix(colSums(layer_1$`kernel:0`), ncol = 28)
+      image(startmat, main = glue('Epoch {epoch}, layer {layer}'))
+    }
+  } else if (layer == 2) {
+    layer_2 <- h5read(filename, labels$group[7])
+    H5close()
+    if (type == "weights") {
+      startmat <- matrix(rowSums(layer_2$`kernel:0`), ncol = 10)
+      image(startmat, main = glue('Epoch {epoch}, layer {layer}'))
+    }
+    
+  }
+}
+
+data.frame(epoch = rep(1:5, each = 2),
+           layer = rep(1:2, 5)) %>% 
+  walk2(.x = .$epoch, .y = .$layer, .f = ~ plotWeight(.x, .y))
+
+```
+
+## Manually calculate trained model for a single input
+
+Read in final trained model (5th epoch):
+
+```{r}
+weights05_01 <- h5read("weights.01.hdf5", "/hidden_1/hidden_1")
+H5close()
+weights05_02 <- h5read("weights.01.hdf5", "/hidden_2/hidden_2")
+H5close()
+```
+
+Calculate relu for first hidden layer:
+
+```{r}
+xx <- (weights05_01$`kernel:0` %*% train_images[1,]) + as.matrix(weights05_01$`bias:0`, ncol = 1)
+xx <- ifelse(xx < 0, 0, xx)
+```
+
+Calculate softmax for second hidden layer:
+
+```{r}
+# Define functions:
+logsumexp <- function (x) {
+  y = max(x)
+  y + log(sum(exp(x - y)))
+}
+
+softmax <- function (x) {
+  round(exp(x - logsumexp(x)),2)
+}
+
+softmax(weights05_02$`kernel:0` %*% xx + as.matrix(weights05_02$`bias:0`, ncol = 1))
+
+```

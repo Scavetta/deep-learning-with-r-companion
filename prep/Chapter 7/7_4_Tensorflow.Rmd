@@ -1,0 +1,135 @@
+---
+title: "The Tensorboard Visualization Framework"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+# Initialize package
+# install.packages(keras)
+library(keras)
+```
+
+In this case study, we'll showcase two loss functions: `cateogircal_crossentropy`, which we saw in the MNIST case study, and `sparse_categorical_crossentropy`.
+
+## Install tensorflow 
+
+It's only necessary to run this once. 
+
+```{r install, eval = F}
+# for GPU
+# install_keras(tensorflow = "gpu")
+
+# or CPU:
+# install_keras() # for cpu
+```
+
+## Prepare data
+
+```{r}
+c(c(train_images, train_labels), c(test_images, test_labels)) %<-% dataset_mnist()
+
+# train_images <- array_reshape(train_images, c(60000, 28, 28, 1))
+# train_images <- train_images / 255
+train_images <- array_reshape(train_images, c(60000, 28 * 28))
+train_images <- train_images / 255
+
+# test_images <- array_reshape(test_images, c(10000, 28, 28, 1))
+# test_images <- test_images / 255
+test_images <- array_reshape(test_images, c(10000, 28 * 28))
+test_images <- test_images / 255
+
+train_labels <- to_categorical(train_labels)
+test_labels <- to_categorical(test_labels)
+
+network <- keras_model_sequential() %>%
+  layer_dense(units = 512, activation = "relu", input_shape = c(28 * 28), name = "hidden_1") %>%
+  layer_dense(units = 10, activation = "softmax", name = "hidden_2")
+
+network %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+```
+
+## Using Tensorboard
+
+View results
+
+```{r}
+tensorboard("logs/run_a")
+
+```
+
+
+```{r}
+
+#### using with tensor board:
+history <- network %>%
+  fit(train_images, train_labels,
+    epochs = 5,
+    batch_size = 128,
+  # validation_split = 0.2,
+  callbacks = callback_tensorboard("logs/run_a")
+)
+
+```
+
+
+
+
+```{r}
+# Tools to access information:
+get_weights(history)
+
+
+```
+
+
+
+
+
+```{r}
+plot(history)
+history_df <- as.data.frame(history)
+str(history_df)
+```
+
+
+
+```{r}
+
+str(mydata)
+# library(tidyverse)
+mydata <- gather(as_tibble(weights01_03$kernel))
+mydata$ID <- rep(1:512,784)
+mydata$key <- as.integer(sub("V", "", mydata$key))
+p <- ggplot(mydata, aes(key, ID, fill = value)) +
+  geom_raster()
+
+p
+history$metrics
+
+# It’s often useful to run TensorBoard while you are training a model.
+# To do this, simply launch tensorboard within the training directory
+# right before you begin training:
+
+# launch TensorBoard (data won't show up until after the first epoch)
+tensorboard("logs/run_a")
+
+# fit the model with the TensorBoard callback
+history <- network %>%
+  fit(train_images, train_labels,
+      epochs = 5,
+      batch_size = 128,
+      # validation_split = 0.2,
+      callbacks = callback_tensorboard("logs/run_a")
+  )
+####################################################################################
+####################################################################################
+
+```
+
+

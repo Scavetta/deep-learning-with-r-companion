@@ -1,0 +1,340 @@
+---
+title: "The Functional API"
+author: "Rick Scavetta" 
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+# Initialize package
+# install.packages(keras)
+library(keras)
+```
+
+In this case study, we'll showcase two loss functions: `cateogircal_crossentropy`, which we saw in the MNIST case study, and `sparse_categorical_crossentropy`.
+
+## Install tensorflow 
+
+It's only necessary to run this once. 
+
+```{r install, eval = F}
+# for GPU
+# install_keras(tensorflow = "gpu")
+
+# or CPU:
+# install_keras() # for cpu
+```
+
+## The Sequential Model
+
+Use `keras_model_sequential()` to initialize a model.
+
+```{r seq}
+seq_model <- keras_model_sequential() %>%
+  layer_dense(units = 32, activation = "relu", input_shape = c(64)) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 10, activation = "softmax")
+
+summary(seq_model)
+```
+
+## The Functional API
+
+Use `keras_model()` to define a model
+
+```{r}
+# Define inputs
+input_tensor <- layer_input(shape = c(64))
+
+# Defint outputs
+output_tensor <- input_tensor %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 10, activation = "softmax")
+
+# Define model taking inputs and outputs as arguments
+fun_model <- keras_model(input_tensor, output_tensor)
+
+summary(fun_model)
+```
+
+`compile()`, `fit()` and `evaluate()` as usual.
+
+## Multimodal Inputs
+
+### Input 1
+
+The text input is a variable-length sequence of integers.
+
+```{r}
+text_input <- layer_input(shape = list(NULL),
+                          dtype = "int32", 
+                          name = "text")
+
+## Embeds the inputs into a sequence of vectors of size 64
+## Encodes the vectors in a single vector via an LSTM
+text_vocabulary_size <- 10000
+
+encoded_text <- text_input %>%
+  layer_embedding(input_dim = 64, output_dim = text_vocabulary_size) %>%
+  layer_lstm(units = 32)
+```
+
+### Input 2
+
+Same process (with different layer instances) for the question
+
+```{r}
+question_input <- layer_input(shape = list(NULL),
+                              dtype = "int32", 
+                              name = "question")
+
+ques_vocabulary_size <- 10000
+
+encoded_question <- question_input %>%
+  layer_embedding(input_dim = 32, output_dim = ques_vocabulary_size) %>%
+  layer_lstm(units = 16)
+```
+
+### Concatenate
+
+```{r}
+concatenated <- layer_concatenate(list(encoded_text, encoded_question))
+```
+
+### Output
+
+softmax classifier on top
+
+```{r}
+answer_vocabulary_size <- 500
+
+answer <- concatenated %>%
+  layer_dense(units = answer_vocabulary_size, activation = "softmax")
+```
+
+### Complete model
+
+```{r}
+model <- keras_model(list(text_input, question_input), 
+                     answer)
+
+summary(model)
+```
+
+```{r}
+model %>% compile(optimizer = "rmsprop",
+                  loss = "categorical_crossentropy",
+                  metrics = "accuracy")
+```
+
+Produce some play data:
+
+```{r}
+num_samples <- 1000
+max_length <- 100
+
+# Some dummy data
+random_matrix <- function(range, nrow, ncol) {
+  matrix(sample(range, size = nrow * ncol, replace = TRUE),
+         nrow = nrow, ncol = ncol)
+}
+
+text <- random_matrix(1:text_vocabulary_size, num_samples, max_length)
+question <- random_matrix(1:ques_vocabulary_size, num_samples, max_length)
+# One-hot encoded
+answers <- random_matrix(0:1, num_samples, answer_vocabulary_size)
+
+```
+
+There are two possible APIs
+
+1. Feed the model a list of arrays as inputs, or
+2. Feed it a dictionary that maps input names to arrays (if you give names to your inputs).
+
+```{r eval = FALSE}
+# Option 1 - Fit using a list of inputs
+model %>% fit(list(text, question), 
+              answers,
+              epochs = 10, 
+              batch_size = 128)
+```
+
+### Option 2
+
+Fit using a named list of inputs
+
+```{r eval = FALSE}
+model %>% fit(list(text = text, 
+                   question = question), 
+              answers,
+              epochs = 10, 
+              batch_size = 128)
+```
+
+## Multi-output models
+
+### Define inputs
+
+```{r}
+vocabulary_size <- 50000
+num_income_groups <- 10
+
+posts_input <- layer_input(shape = list(NULL),
+                           dtype = "int32",
+                           name = "posts")
+
+embedded_posts <- posts_input %>%
+  layer_embedding(input_dim = 256,
+                  output_dim = vocabulary_size)
+
+base_model <- embedded_posts %>%
+  layer_conv_1d(filters = 128, kernel_size = 5, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 5) %>%
+  layer_conv_1d(filters = 256, kernel_size = 5, activation = "relu") %>%
+  layer_conv_1d(filters = 256, kernel_size = 5, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 5) %>%
+  layer_conv_1d(filters = 256, kernel_size = 5, activation = "relu") %>%
+  layer_conv_1d(filters = 256, kernel_size = 5, activation = "relu") %>%
+  layer_global_max_pooling_1d() %>%
+  layer_dense(units = 128, activation = "relu")
+```
+
+### Define output layers
+
+Each output layers has it's own names
+
+```{r}
+age_prediction <- base_model %>%
+  layer_dense(units = 1, name = "age")
+income_prediction <- base_model %>%
+  layer_dense(num_income_groups, activation = "softmax", name = "income")
+gender_prediction <- base_model %>%
+  layer_dense(units = 1, activation = "sigmoid", name = "gender")
+
+```
+
+### Define complete model
+
+```{r}
+model <- keras_model(
+  posts_input,
+  list(age_prediction, income_prediction, gender_prediction)
+)
+
+summary(model)
+```
+
+Importantly, training such a model requires the ability to specify different loss func- tions for different heads of the network: for instance, age prediction is a scalar regres- sion task, but gender prediction is a binary classification task, requiring a different training procedure. But because gradient descent requires you to minimize a scalar, you must combine these losses into a single value in order to train the model. The simplest way to combine different losses is to sum them all. In Keras, you can use either a list or a named list of losses in compile to specify different objects for differ- ent outputs; the resulting loss values are summed into a global loss, which is mini- mized during training.
+
+## Compiling a multi-output model
+
+### Multiple losses
+
+```{r}
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = c("mse", "categorical_crossentropy", "binary_crossentropy")
+)
+```
+
+
+```{r eval = FALSE}
+# Alternatively, if you give names to the output layers
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = list(
+    age = "mse",
+    income = "categorical_crossentropy",
+    gender = "binary_crossentropy"
+  ) )
+```
+
+### Loss weighting
+
+Note that very imbalanced loss contributions will cause the model representations to be optimized preferentially for the task with the largest individual loss, at the expense of the other tasks. To remedy this, you can assign different levels of importance to the loss values in their contribution to the final loss. This is useful in particular if the losses’ values use different scales. For instance, the mean squared error (MSE) loss used for the age-regression task typically takes a value around 3–5, whereas the cross- entropy loss used for the gender-classification task can be as low as 0.1. In such a situa- tion, to balance the contribution of the different losses, you can assign a weight of 10 to the crossentropy loss and a weight of 0.25 to the MSE loss.
+
+```{r eval = FALSE}
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = c("mse", "categorical_crossentropy", "binary_crossentropy"),
+  loss_weights = c(0.25, 1, 10)
+)
+```
+
+
+```{r eval = FALSE}
+# Alternatively, if you give names to the output layers
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = list(
+    age = "mse",
+    income = "categorical_crossentropy",
+    gender = "binary_crossentropy"
+  ),
+  loss_weights = list(
+    age = 0.25,
+    income = 1,
+    gender = 10
+  ) )
+```
+
+## Feeding input:
+
+Two ways, like above:
+Much as in the case of multi-input models, you can pass data to the model for training either via a plain list of arrays or via a named list of arrays.
+
+```{r eval = FALSE}
+# age_targets, income_targets, and gender_targets are assumed to be R arrays.
+# option 1
+model %>% fit(posts,
+              list(age_targets, 
+                   income_targets, 
+                   gender_targets),
+              epochs = 10, 
+              batch_size = 64)
+
+```
+
+## Branching networks:
+
+Every branch has the same stride value (2), which is necessary to keep all branch outputs the same size so you can concatenate them.
+
+```{r eval = FALSE}
+# Branch a
+branch_a <- input %>%
+  layer_conv_2d(filters = 128, kernel_size = 1,
+                activation = "relu", strides = 2)
+
+# Branch b: Striding occurs in the spatial convolution layer
+branch_b <- input %>%
+  layer_conv_2d(filters = 128, kernel_size = 1,
+                activation = "relu") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3,
+                activation = "relu", strides = 2)
+
+# Branch c: Striding occurs in the average pooling layer
+branch_c <- input %>%
+  layer_average_pooling_2d(pool_size = 3, strides = 2) %>%
+   layer_conv_2d(filters = 128, kernel_size = 3,
+                activation = "relu")
+
+# Branch d
+branch_d <- input %>%
+  layer_conv_2d(filters = 128, kernel_size = 1,
+                activation = "relu") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3,
+                activation = "relu") %>%
+  layer_conv_2d(filters = 128, kernel_size = 3,
+                activation = "relu", strides = 2)
+```
+
+### Concatenates the branch outputs to obtain the module output
+
+```{r eval = FALSE}
+output <- layer_concatenate(list(
+  branch_a, branch_b, branch_c, branch_d
+))
+```
+

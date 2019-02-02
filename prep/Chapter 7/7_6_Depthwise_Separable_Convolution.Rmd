@@ -1,0 +1,67 @@
+---
+title: "Depth-wise Separable Convolution"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Initialize package
+# install.packages(keras)
+library(keras)
+```
+
+In this case study, we'll showcase two loss functions: `cateogircal_crossentropy`, which we saw in the MNIST case study, and `sparse_categorical_crossentropy`.
+
+## Install tensorflow 
+
+It's only necessary to run this once. 
+
+```{r install, eval = F}
+# for GPU
+# install_keras(tensorflow = "gpu")
+
+# or CPU:
+# install_keras() # for cpu
+```
+
+## 
+
+```{r}
+height <- 64
+width <- 64
+channels <- 3
+num_classes <- 10
+
+model <- keras_model_sequential() %>%
+  layer_separable_conv_2d(filters = 32, kernel_size = 3,
+                          activation = "relu",
+                          input_shape = c(height, width, channels)) %>%
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = 2) %>%
+  
+  layer_separable_conv_2d(filters = 64, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_separable_conv_2d(filters = 128, kernel_size = 3,
+                          activation = "relu") %>%
+  layer_global_average_pooling_2d() %>%
+  
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = num_classes, activation = "softmax")
+  
+summary(model)
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy"
+)
+
+```
+
