@@ -1,0 +1,109 @@
+---
+title: "Computer Vision: MNIST as a Convnet"
+author: "Rick Scavetta"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+# Initialize package
+library(keras)
+```
+
+In part one of the workshop we jsut use densly connected neural networks and treated the MNIST data set as a collection of 784 pixels. That's why when we scrambled the images in various, consistent ways, our neural networks worked just fine. However, if we have images we should treat them as such, because then we have access to more powerful techniques. Before we dig into the dog versus cat data set, let's establish our first Convolutional neural network with the MNIST data set. 
+
+## Obtain and prepare data
+
+We saw these steps back in chapter 2. If your not clear about what's happening here, please review that unit.
+
+```{r getData}
+
+c(c(train_images, train_labels), c(test_images, test_labels)) %<-% dataset_mnist()
+
+train_images <- array_reshape(train_images, c(60000, 28, 28, 1))/255
+test_images <- array_reshape(test_images, c(10000, 28, 28, 1))/255
+
+train_labels <- to_categorical(train_labels)
+test_labels <- to_categorical(test_labels)
+
+```
+
+## Convnets: Defining our model 
+
+We saw the structure of our convnet in the presentation. Here's how we would define it using keras.
+
+```{r modelPart1}
+
+model <- keras_model_sequential() %>%
+  
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu", input_shape = c(28, 28, 1)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu")
+
+summary(model)
+
+```
+
+
+
+```{r MNISTPart, fig.cap = 'MNIST Convnet only.', eval = T}
+
+knitr::include_graphics("Convnets-6.png")
+```
+
+Complete the model and compile it
+
+```{r modelPart2}
+
+model %>%
+  layer_flatten() %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 10, activation = "softmax")
+
+
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+summary(model)
+
+```
+
+```{r MNISTComp, fig.cap = 'MNIST complete Convnet.', eval = T}
+
+knitr::include_graphics("Convnets-complete.png")
+```
+
+
+## Fit the model and view the history:
+
+```{r modelTrain, eval = T}
+
+history <- model %>% fit(
+  train_images, train_labels,
+  epochs = 5, 
+  batch_size = 64
+)
+
+plot(history)
+
+```
+
+## Evaluate the model on the test data:
+
+Using just a densly-connected network we obtained a test set accuracy of 0.9803.
+
+```{r}
+
+model %>% evaluate(test_images, test_labels)
+
+```
+

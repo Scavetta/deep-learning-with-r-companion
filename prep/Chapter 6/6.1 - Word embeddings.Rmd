@@ -1,0 +1,97 @@
+---
+title: "Word embeddings"
+output: html_output
+---
+
+```{r}
+library(keras)
+```
+
+# Loading the IMDB data for use with an embedding layer
+
+Restrict the movie reviews to the top 10,000 most common words then cut off the reviews after only 20 words to make the situation a bit simpler.
+
+```{r}
+# Number of most common words to consider as features
+max_features <- 10000
+
+# Loads the data as lists of integers
+c(c(x_train, y_train), c(x_test, y_test)) %<-% dataset_imdb(num_words = max_features)
+
+# Cut off the text after 20 words (i.e. among the max_features most common words)
+maxlen <- 20
+
+# Turns the lists of integers into a 2D integer tensor of shape (samples, maxlen)
+x_train <- pad_sequences(x_train, maxlen = maxlen)
+x_test <- pad_sequences(x_test, maxlen = maxlen)
+```
+
+```{r}
+dim(x_test)
+```
+
+# Using an embedding layer and classifier on the IMDB data
+
+The network will:
+
+1. Learn 8-dimensional embeddings for each of the 10,000 words, 
+2. Turn the input integer sequences (2D integer tensor) into embedded sequences (3D float tensor),
+3. Flatten the tensor to 2D, and
+4. Train a single dense layer on top for classification.
+
+```{r}
+# Part 1 & 2:
+# Specify the maximum input length to the embedding layer so you can later flatten the embedded inputs.
+model <- keras_model_sequential() %>%
+  layer_embedding(input_dim = 10000, 
+                  output_dim = 8,
+                  input_length = maxlen)
+
+# Part 3:
+# After the embedding layer, the activations have shape (samples, maxlen, 8).
+# Flattens the 3D tensor of embeddings into a 2D tensor of shape (samples, maxlen * 8)
+model <- model %>% 
+  layer_flatten()
+
+# Part 4:
+# Adds the classifier on top
+model <- model %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+```
+
+Compile the model
+
+```{r}
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("acc")
+)
+
+summary(model)
+```
+
+
+Train the model
+
+```{r}
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 10,
+  batch_size = 32,
+  validation_split = 0.2
+)
+```
+
+
+```{r}
+plot(history)
+```
+
+
+```{r}
+# Peak validation accuracy:
+history$metrics$val_acc[10]
+```
+

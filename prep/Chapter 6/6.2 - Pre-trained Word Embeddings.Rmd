@@ -1,0 +1,352 @@
+---
+title: "Pre-trained word embeddings: GloVe"
+output: html_output
+---
+
+```{r}
+library(keras)
+```
+
+## IMDB data set from raw text
+
+Previously we have used the built-in data set, but it's useful to see how we can work with raw text.
+
+You can obtain the data files via `http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz`, or you can use the following commands to obtain the IMDB data files if you want to do this via the terminal:  
+
+```
+cd Chapter\ 6
+mkdir data
+cd data
+wget "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
+gunzip aclImdb_v1.tar.gz 
+tar xvf aclImdb_v1.tar
+rm aclImdb_v1.tar 
+```
+
+```{r}
+
+imdb_dir <- "./data/aclImdb"
+train_dir <- file.path(imdb_dir, "train")
+
+labels <- c()
+texts <- c()
+
+for (label_type in c("neg", "pos")) {
+  label <- switch(label_type, neg = 0, pos = 1)
+  dir_name <- file.path(train_dir, label_type)
+  for (fname in list.files(dir_name, pattern = glob2rx("*.txt"), 
+                           full.names = TRUE)) {
+    texts <- c(texts, readChar(fname, file.info(fname)$size))
+    labels <- c(labels, label)
+  }
+}
+
+# Prepare the labels
+labels <- as.array(labels)
+
+```
+
+The text is just a vector, where each element is a movie review.
+
+```{r}
+
+texts[1]
+
+str(texts)
+typeof(texts)
+class(texts)
+length(texts)
+
+```
+
+### Tokenize the data
+
+Let's vectorize the texts we collected, and prepare a training and validation split. We will merely be using the concepts we introduced earlier in this section.
+
+Because pre-trained word embeddings are meant to be particularly useful on problems where little training data is available (otherwise, task-specific embeddings are likely to outperform them), we will add the following twist: we restrict the training data to its first 200 samples. So we will be learning to classify movie reviews after looking at just 200 examples...
+
+```{r}
+max_words <- 10000            # We will only consider the top 10,000 words in the dataset
+
+tokenizer <- text_tokenizer(num_words = max_words) %>% 
+  fit_text_tokenizer(texts)
+
+typeof(tokenizer)
+names(tokenizer)
+```
+
+We have now tokenized the text, the first step in our process:
+
+```{r}
+word_index <- tokenizer$word_index
+head(tokenizer$word_index)
+```
+
+Number of unique tokens:
+
+```{r}
+length(tokenizer$word_index)
+```
+
+```{r}
+head(tokenizer$index_word)
+```
+
+```{r}
+sequences <- texts_to_sequences(tokenizer, texts)
+```
+
+`sequences` contains the vectorized values as a list.
+
+```{r}
+# The vectorized first instance:
+sequences[[1]]
+```
+
+What the text has become:
+
+```{r} 
+paste(unlist(tokenizer$index_word)[sequences[[1]]] ,collapse=" ")
+```
+
+From our original text:
+
+```{r}
+texts[[1]]
+```
+
+Like before, we'll limit ourselves to the first 100 words.
+
+```{r}
+
+maxlen <- 100                 # We will cut reviews after 100 words
+
+data <- pad_sequences(sequences, maxlen = maxlen)
+```
+
+```{r}
+data[1,]
+```
+
+```{r}
+paste(unlist(tokenizer$index_word)[data[1,]] ,collapse=" ")
+```
+
+Shape of data tensor: `r dim(data)`, Shape of label tensor: `r dim(labels)`.
+
+And here, instead of letting the fit function produce a validation set split, we'll do that manually.
+
+But first, we'll need to shuffle the data, since we started from an ordered data set (all negative, followed by all positive).
+
+```{r}
+indices <- sample(1:nrow(data))
+
+training_samples <- 200       # We will be training on 200 samples
+validation_samples <- 10000   # We will be validating on 10000 samples
+
+training_indices <- indices[1:training_samples]
+validation_indices <- indices[(training_samples + 1): 
+                              (training_samples + validation_samples)]
+
+x_train <- data[training_indices,]
+y_train <- labels[training_indices]
+
+x_val <- data[validation_indices,]
+y_val <- labels[validation_indices]
+```
+
+### Download the GloVe word embeddings
+
+The GloVE pretrained word embeddings are derived from the 2014 English Wikipedia. It can be downloaded [here](https://nlp.stanford.edu/projects/glove/). The file to look for is `glove.6B.zip` (822MB). In it you'll find  100-dimensional embedding vectors for 400,000 words (or non-word tokens).
+
+Download and unzip the file (it will just a be a `txt` file) and place it in the _pretrained_ folder.
+
+Here are the commands if you want to do this via the terminal:  
+
+```
+cd Chapter\ 6
+mkdir pretrained
+cd pretrained/
+mkdir glove.6B
+cd glove.6B
+wget "http://nlp.stanford.edu/data/glove.6B.zip"
+unzip glove.6B.zip
+rm glove.6B.zip 
+```
+
+### Pre-process the embeddings
+
+We'll parse the `txt` file to build an index mapping words (as strings) to their vector representation (as number 
+vectors).
+
+```{r}
+glove_dir <- "./pretrained/glove.6B"
+lines <- readLines(file.path(glove_dir, "glove.6B.100d.txt"))
+
+lines[1] # Word embeddings in 100 dimensions.
+```
+
+The word embeddings are contained in strings that contain the word and then 100 numbers separated by a space. We need to get an embedding matrix that we can use 
+
+Here we'll use a nice trick to work with the embeddings by making them into an environment instead of a lsit.
+
+```{r}
+
+embeddings_index <- new.env(hash = TRUE, parent = emptyenv())
+for (i in 1:length(lines)) {
+  line <- lines[[i]]
+  values <- strsplit(line, " ")[[1]]
+  word <- values[[1]]
+  embeddings_index[[word]] <- as.double(values[-1])
+}
+
+# 400000
+```
+
+This results in `r length(embeddings_index)` word vectors. i.e. the 100-dimensional embedding vectors for 400,000 words.
+
+```{r}
+embeddings_index[["the"]]
+```
+
+Now we're ready to build an embedding matrix that we can load into an embedding layer.
+
+It must be a matrix of shape `(max_words, embedding_dim)`, where each entry _i_ contains the `embedding_dim`-dimensional vector for the word of index _i_ in the reference word index (built during tokenization). Note that index 1 isn't supposed to stand for any word or token -- it's a placeholder.
+
+```{r}
+embedding_dim <- 100
+
+embedding_matrix <- array(0, c(max_words, embedding_dim))
+
+for (word in names(word_index)) {
+  index <- word_index[[word]]
+  if (index < max_words) {
+    embedding_vector <- embeddings_index[[word]]
+    if (!is.null(embedding_vector))
+      # Words not found in the embedding index will be all zeros.
+      embedding_matrix[index+1,] <- embedding_vector
+  }
+}
+```
+
+### Define a model
+
+We will be using the same model architecture as before:
+
+```{r}
+model <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = max_words, # 10000 tokens
+                  output_dim = embedding_dim, # 100 dimensions
+                  input_length = maxlen) %>%  # 100 length of each review.
+  layer_flatten() %>% 
+  layer_dense(units = 32, activation = "relu") %>% 
+  layer_dense(units = 1, activation = "sigmoid")
+
+summary(model)
+```
+
+### Load the GloVe embeddings in the model
+
+The embedding layer has a single weight matrix: a 2D float matrix where each entry _i_ is the word vector meant to be associated with index _i_. Simple enough. Load the GloVe matrix you prepared into the embedding layer, the first layer in the model.
+
+```{r}
+get_layer(model, index = 1) %>% 
+  set_weights(list(embedding_matrix)) %>% 
+  freeze_weights()
+```
+
+Additionally, you'll freeze the weights of the embedding layer, following the same rationale you're already familiar with in the context of pretrained convnet features: when parts of a model are pretrained (like your embedding layer) and parts are randomly initialized (like your classifier), the pretrained parts shouldn't be updated during training, to avoid forgetting  what they already know. The large gradient updates triggered by the randomly initialized layers would be disruptive to the already-learned features.
+
+### Train and evaluate
+
+Let's compile our model and train it:
+
+```{r, echo=TRUE, results='hide'}
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("acc")
+)
+
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 20,
+  batch_size = 32,
+  validation_data = list(x_val, y_val)
+)
+
+save_model_weights_hdf5(model, "pre_trained_glove_model.h5")
+```
+
+Let's plot its performance over time:
+
+```{r}
+plot(history)
+```
+
+The model quickly starts overfitting, unsurprisingly given the small number of training samples. Validation accuracy has high variance for the same reason, but seems to reach high 50s.
+
+Note that your mileage may vary: since we have so few training samples, performance is heavily dependent on which exact 200 samples we picked, and we picked them at random. If it worked really poorly for you, try picking different random set of 200 samples, just for the sake of the exercise (in real life you don't get to pick your training data).
+
+We can also try to train the same model without loading the pre-trained word embeddings and without freezing the embedding layer. In that case, we would be learning a task-specific embedding of our input tokens, which is generally more powerful than pre-trained word embeddings when lots of data is available. However, in our case, we have only 200 training samples. Let's try it:
+
+```{r, echo=TRUE, results='hide'}
+model <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = max_words, output_dim = embedding_dim, 
+                  input_length = maxlen) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 32, activation = "relu") %>% 
+  layer_dense(units = 1, activation = "sigmoid")
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("acc")
+)
+
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 20,
+  batch_size = 32,
+  validation_data = list(x_val, y_val)
+)
+```
+
+```{r}
+plot(history)
+```
+
+Validation accuracy stalls in the low 50s. So in our case, pre-trained word embeddings does outperform jointly learned embeddings. If you increase the number of training samples, this will quickly stop being the case -- try it as an exercise.
+
+Finally, let's evaluate the model on the test data. First, we will need to tokenize the test data:
+
+```{r}
+test_dir <- file.path(imdb_dir, "test")
+
+labels <- c()
+texts <- c()
+
+for (label_type in c("neg", "pos")) {
+  label <- switch(label_type, neg = 0, pos = 1)
+  dir_name <- file.path(test_dir, label_type)
+  for (fname in list.files(dir_name, pattern = glob2rx("*.txt"), 
+                           full.names = TRUE)) {
+    texts <- c(texts, readChar(fname, file.info(fname)$size))
+    labels <- c(labels, label)
+  }
+}
+
+sequences <- texts_to_sequences(tokenizer, texts)
+x_test <- pad_sequences(sequences, maxlen = maxlen)
+y_test <- as.array(labels)
+```
+
+And let's load and evaluate the first model:
+
+```{r}
+model %>% 
+  load_model_weights_hdf5("pre_trained_glove_model.h5") %>% 
+  evaluate(x_test, y_test, verbose = 0)
+```
+
+We get an appalling test accuracy of 57%. Working with just a handful of training samples is hard!

@@ -1,0 +1,68 @@
+---
+title: "Looking at word embeddings in TensorBoard"
+---
+
+```{r}
+library(keras)
+
+max_features <- 2000                                     
+max_len <- 500                                           
+
+c(c(x_train, y_train), c(x_test, y_test)) %<-% dataset_imdb(num_words = max_features)
+
+x_train <- pad_sequences(x_train, maxlen = max_len)
+x_test = pad_sequences(x_test, maxlen = max_len)
+
+model <- keras_model_sequential() %>%
+  layer_embedding(input_dim = max_features, 
+                  output_dim = 128,
+                  input_length = max_len, 
+                  name = "embed") %>%
+  layer_conv_1d(filters = 32, kernel_size = 7, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 5) %>%
+  layer_conv_1d(filters = 32, kernel_size = 7, activation = "relu") %>%
+  layer_global_max_pooling_1d() %>%
+  layer_dense(units = 1)
+
+summary(model)
+
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("acc")
+)
+
+w <- model %>% get_layer(index = 1) %>% get_weights()
+
+emodel <- model <- keras_model_sequential() %>%
+  layer_embedding(input_dim = max_features, output_dim = 128, input_length = 1) %>%
+  layer_global_max_pooling_1d() %>%
+  layer_dense(units = 1)
+
+emodel %>% get_layer(index = 1) %>% set_weights(w) %>% freeze_weights()
+
+emodel %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("acc")
+)
+
+callbacks = list(
+  callback_tensorboard(
+    log_dir = "my_log_dir",
+    embeddings_freq = 1,
+    embeddings_metadata = 1:max_features
+  )
+)
+
+history <- emodel %>% fit(
+  1:max_features, 1:max_features,
+  epochs = 1,
+  batch_size = 256,
+  callbacks = callbacks
+)
+
+tensorboard("my_log_dir")    
+
+```
+
